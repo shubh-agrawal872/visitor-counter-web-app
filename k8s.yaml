@@ -1,0 +1,153 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: visitor-counter
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: visitor-counter-config
+  namespace: visitor-counter
+data:
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  ENVIRONMENT: "Kubernetes Cluster (Minikube)"
+  CLUSTER_NAME: "Minikube-Primary"
+  COLOR_THEME: "#2563eb"
+
+---
+# -------------------------------------------------------------
+# Redis Deployment & Service
+# -------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-deployment
+  namespace: visitor-counter
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: redis-storage
+              mountPath: /data
+      volumes:
+        - name: redis-storage
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: visitor-counter
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+
+---
+# -------------------------------------------------------------
+# Flask Web Application Deployment & Service
+# -------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: visitor-counter-web
+  namespace: visitor-counter
+  labels:
+    app: visitor-counter-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: visitor-counter-web
+  template:
+    metadata:
+      labels:
+        app: visitor-counter-web
+    spec:
+      containers:
+        - name: web
+          # For Minikube local testing, using locally built image or Docker Hub image
+          image: visitor-counter-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: visitor-counter-config
+          resources:
+            requests:
+              # Cost Optimization Technique 1: Right-sizing requests
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: visitor-counter-service
+  namespace: visitor-counter
+spec:
+  type: NodePort
+  selector:
+    app: visitor-counter-web
+  ports:
+    - port: 5000
+      targetPort: 5000
+      nodePort: 30080
